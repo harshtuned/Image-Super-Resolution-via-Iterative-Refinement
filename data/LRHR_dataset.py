@@ -18,7 +18,6 @@ class LRHRDataset(Dataset):
         if datatype == 'lmdb':
             self.env = lmdb.open(dataroot, readonly=True, lock=False,
                                  readahead=False, meminit=False)
-            # init the datalen
             with self.env.begin(write=False) as txn:
                 self.dataset_len = int(txn.get("length".encode("utf-8")))
             if self.data_len <= 0:
@@ -26,8 +25,10 @@ class LRHRDataset(Dataset):
             else:
                 self.data_len = min(self.data_len, self.dataset_len)
         elif datatype == 'img':
+            # CHANGE: load from lr_128 folder directly instead of sr_128_256
+            # bicubic upscaling is done on the fly in __getitem__
             self.sr_path = Util.get_paths_from_images(
-                '{}/sr_{}_{}'.format(dataroot, l_resolution, r_resolution))
+                '{}/lr_{}'.format(dataroot, l_resolution))
             self.hr_path = Util.get_paths_from_images(
                 '{}/hr_{}'.format(dataroot, r_resolution))
             if self.need_LR:
@@ -52,43 +53,36 @@ class LRHRDataset(Dataset):
         if self.datatype == 'lmdb':
             with self.env.begin(write=False) as txn:
                 hr_img_bytes = txn.get(
-                    'hr_{}_{}'.format(
-                        self.r_res, str(index).zfill(5)).encode('utf-8')
-                )
+                    'hr_{}_{}'.format(self.r_res, str(index).zfill(5)).encode('utf-8'))
                 sr_img_bytes = txn.get(
-                    'sr_{}_{}_{}'.format(
-                        self.l_res, self.r_res, str(index).zfill(5)).encode('utf-8')
-                )
+                    'sr_{}_{}_{}'.format(self.l_res, self.r_res, str(index).zfill(5)).encode('utf-8'))
                 if self.need_LR:
                     lr_img_bytes = txn.get(
-                        'lr_{}_{}'.format(
-                            self.l_res, str(index).zfill(5)).encode('utf-8')
-                    )
-                # skip the invalid index
+                        'lr_{}_{}'.format(self.l_res, str(index).zfill(5)).encode('utf-8'))
                 while (hr_img_bytes is None) or (sr_img_bytes is None):
                     new_index = random.randint(0, self.data_len-1)
                     hr_img_bytes = txn.get(
-                        'hr_{}_{}'.format(
-                            self.r_res, str(new_index).zfill(5)).encode('utf-8')
-                    )
+                        'hr_{}_{}'.format(self.r_res, str(new_index).zfill(5)).encode('utf-8'))
                     sr_img_bytes = txn.get(
-                        'sr_{}_{}_{}'.format(
-                            self.l_res, self.r_res, str(new_index).zfill(5)).encode('utf-8')
-                    )
+                        'sr_{}_{}_{}'.format(self.l_res, self.r_res, str(new_index).zfill(5)).encode('utf-8'))
                     if self.need_LR:
                         lr_img_bytes = txn.get(
-                            'lr_{}_{}'.format(
-                                self.l_res, str(new_index).zfill(5)).encode('utf-8')
-                        )
-                img_HR = Image.open(BytesIO(hr_img_bytes)).convert("RGB")
-                img_SR = Image.open(BytesIO(sr_img_bytes)).convert("RGB")
+                            'lr_{}_{}'.format(self.l_res, str(new_index).zfill(5)).encode('utf-8'))
+                # CHANGE: convert to grayscale "L" instead of RGB
+                img_HR = Image.open(BytesIO(hr_img_bytes)).convert("L")
+                img_SR = Image.open(BytesIO(sr_img_bytes)).convert("L")
+                # CHANGE: bicubic upscale LR to match HR size
+                img_SR = img_SR.resize((self.r_res, self.r_res), Image.BICUBIC)
                 if self.need_LR:
-                    img_LR = Image.open(BytesIO(lr_img_bytes)).convert("RGB")
+                    img_LR = Image.open(BytesIO(lr_img_bytes)).convert("L")
         else:
-            img_HR = Image.open(self.hr_path[index]).convert("RGB")
-            img_SR = Image.open(self.sr_path[index]).convert("RGB")
+            # CHANGE: convert to grayscale "L" instead of RGB
+            img_HR = Image.open(self.hr_path[index]).convert("L")
+            img_SR = Image.open(self.sr_path[index]).convert("L")
+            # CHANGE: bicubic upscale LR to match HR size
+            img_SR = img_SR.resize((self.r_res, self.r_res), Image.BICUBIC)
             if self.need_LR:
-                img_LR = Image.open(self.lr_path[index]).convert("RGB")
+                img_LR = Image.open(self.lr_path[index]).convert("L")
         if self.need_LR:
             [img_LR, img_SR, img_HR] = Util.transform_augment(
                 [img_LR, img_SR, img_HR], split=self.split, min_max=(-1, 1))
